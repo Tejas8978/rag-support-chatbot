@@ -70,8 +70,12 @@ aside h2,.kb h2{font-size:15px;margin:0 0 8px}
 <script>
 const $ = s => document.querySelector(s);
 const sid = localStorage.sid || (localStorage.sid = crypto.randomUUID());
+const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? '/api'
+  : 'https://rag-support-chatbot-cqpk.onrender.com/api';
+
 async function api(path, opt = {}) {
-  const r = await fetch('/api' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+  const r = await fetch(API_BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
   const d = await r.json();
   if (!r.ok) throw new Error(d.error || 'Request failed');
   return d;
