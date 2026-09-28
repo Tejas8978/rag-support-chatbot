@@ -78,7 +78,7 @@ async function answer(message, history = []) {
     ? `CONTEXT from knowledge base:\n${hits.map((h, i) => `[${i + 1}] (${h.title}): ${h.text}`).join('\n')}\n\n`
     : '';
 
-  const model = process.env.LLM_MODEL || 'gemini-2.0-flash';
+  const model = process.env.LLM_MODEL || 'gemini-2.5-flash';
 
   const contents = [
     ...history.slice(-6).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
