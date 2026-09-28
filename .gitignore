@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Environment variables (keep secrets local)
+.env
+
+# Model cache (downloaded at runtime, too large for git)
+backend/node_modules/@xenova/transformers/.cache/
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;700&family=Noto+Sans+Telugu&family=Noto+Sans+Devanagari&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0e3b43;--paper:#eef3f2;--card:#fff;--line:#cfdcda;--accent:#f5a524;--muted:#5b7370}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.55 'Hanken Grotesk','Noto Sans Telugu','Noto Sans Devanagari',system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--ink);color:#fff}
+header h1{font-size:18px;margin:0}
+nav button{background:none;border:0;color:#b8d1cf;font:inherit;padding:6px 12px;cursor:pointer;border-bottom:2px solid transparent}
+nav button.on{color:#fff;border-color:var(--accent)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+main{max-width:1000px;margin:24px auto;padding:0 16px}
+.chat{display:grid;grid-template-columns:1fr 300px;gap:16px}
+@media(max-width:800px){.chat{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px}
+#log{height:50vh;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:80%;padding:9px 13px;border-radius:12px;white-space:pre-wrap}
+.msg.user{align-self:flex-end;background:var(--ink);color:#fff}
+.msg.bot{align-self:flex-start;background:var(--paper)}
+.empty{color:var(--muted);margin:auto;text-align:center}
+form.send{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+input,textarea{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;width:100%}
+.btn{background:var(--accent);color:var(--ink);border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:700;cursor:pointer}
+.btn.ghost{background:none;border:1px solid var(--line);font-weight:500}
+aside{padding:14px;font-size:14px}
+aside h2,.kb h2{font-size:15px;margin:0 0 8px}
+.src{border-left:3px solid var(--accent);padding:2px 0 2px 10px;margin:10px 0;color:var(--muted)}
+.src b{color:var(--ink);display:block}
+.kb{display:none;padding:16px}
+.kb form{display:grid;gap:8px;margin-bottom:16px}
+.doc{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.doc p{margin:2px 0 0;color:var(--muted);font-size:14px}
+#err{color:#a52a2a;min-height:1.4em;margin:6px 0 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Support Assistant</h1>
+  <nav><button class="on" data-tab="chat">Chat</button><button data-tab="kb">Knowledge base</button></nav>
+</header>
+<main>
+  <section id="chat" class="chat">
+    <div class="panel">
+      <div id="log" aria-live="polite"></div>
+      <form class="send" id="sendForm">
+        <input id="msg" placeholder="Ask in English, తెలుగు, हिन्दी…" autocomplete="off" aria-label="Your message">
+        <button class="btn">Send</button>
+      </form>
+    </div>
+    <aside class="panel"><h2>Passages used for this answer</h2><div id="srcs"><p class="src">Ask a question to see which knowledge-base passages the answer was based on.</p></div></aside>
+  </section>
+
+  <section id="kb" class="kb panel">
+    <h2>Add support content</h2>
+    <form id="docForm">
+      <input id="title" placeholder="Title, for example: Refund policy (Telugu)">
+      <textarea id="text" rows="5" placeholder="Paste FAQ or policy text in any language"></textarea>
+      <div><button class="btn">Add and index</button></div>
+      <div id="err" role="alert"></div>
+    </form>
+    <div id="docs"></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const sid = localStorage.sid || (localStorage.sid = crypto.randomUUID());
+async function api(path, opt = {}) {
+  const r = await fetch('/api' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Request failed');
+  return d;
+}
+function bubble(role, text) {
+  $('#log .empty')?.remove();
+  const d = document.createElement('div');
+  d.className = 'msg ' + role; d.textContent = text;
+  $('#log').append(d); $('#log').scrollTop = 1e9; return d;
+}
+function showSources(list) {
+  const box = $('#srcs'); box.replaceChildren();
+  if (!list.length) { const p = document.createElement('p'); p.className = 'src'; p.textContent = 'No relevant passage found for this question.'; box.append(p); return; }
+  list.forEach(s => {
+    const d = document.createElement('div'); d.className = 'src';
+    const b = document.createElement('b'); b.textContent = `${s.title} (match ${s.score})`;
+    d.append(b, s.text); box.append(d);
+  });
+}
+$('#sendForm').onsubmit = async e => {
+  e.preventDefault();
+  const message = $('#msg').value.trim(); if (!message) return;
+  $('#msg').value = ''; bubble('user', message);
+  const wait = bubble('bot', '…');
+  try {
+    const d = await api('/chat', { method: 'POST', body: JSON.stringify({ sessionId: sid, message }) });
+    wait.textContent = d.reply; showSources(d.sources);
+  } catch (err) { wait.textContent = err.message; }
+};
+async function loadHistory() {
+  const h = await api('/chat/' + sid).catch(() => []);
+  if (!h.length) { const p = document.createElement('p'); p.className = 'empty'; p.textContent = 'Ask a question about orders, refunds or your account.'; $('#log').append(p); }
+  h.forEach(m => bubble(m.role === 'user' ? 'user' : 'bot', m.content));
+}
+async function loadDocs() {
+  const docs = await api('/docs'); const box = $('#docs'); box.replaceChildren();
+  docs.forEach(d => {
+    const row = document.createElement('div'); row.className = 'doc';
+    const info = document.createElement('div');
+    const t = document.createElement('strong'); t.textContent = d.title;
+    const p = document.createElement('p'); p.textContent = d.text.slice(0, 140) + (d.text.length > 140 ? '…' : '');
+    info.append(t, p);
+    const del = document.createElement('button'); del.className = 'btn ghost'; del.textContent = 'Delete';
+    del.onclick = async () => { await api('/docs/' + d._id, { method: 'DELETE' }); loadDocs(); };
+    row.append(info, del); box.append(row);
+  });
+  if (!docs.length) box.textContent = 'No content yet. Add your first FAQ above.';
+}
+$('#docForm').onsubmit = async e => {
+  e.preventDefault(); $('#err').textContent = '';
+  const btn = e.submitter; btn.disabled = true; btn.textContent = 'Indexing…';
+  try {
+    await api('/docs', { method: 'POST', body: JSON.stringify({ title: $('#title').value, text: $('#text').value }) });
+    $('#title').value = ''; $('#text').value = ''; loadDocs();
+  } catch (err) { $('#err').textContent = err.message; }
+  btn.disabled = false; btn.textContent = 'Add and index';
+};
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  $('#chat').style.display = b.dataset.tab === 'chat' ? 'grid' : 'none';
+  $('#kb').style.display = b.dataset.tab === 'kb' ? 'block' : 'none';
+  if (b.dataset.tab === 'kb') loadDocs();
+});
+loadHistory();
+</script>
+</body>
+</html>
