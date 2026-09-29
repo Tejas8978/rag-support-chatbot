@@ -8,11 +8,23 @@ let extractor;
 // Multilingual embeddings (100 languages), runs locally — no API key needed.
 async function embed(text, type) {
   if (!extractor) {
-    const { pipeline } = await import('@xenova/transformers');
-    extractor = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small');
+    const { pipeline, env } = await import('@xenova/transformers');
+    env.allowLocalModels = false;
+    extractor = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
+      quantized: true,
+    });
   }
   const out = await extractor(`${type}: ${text}`, { pooling: 'mean', normalize: true });
   return Array.from(out.data);
+}
+
+async function warmUp() {
+  try {
+    await embed('warmup', 'query');
+    console.log('Multilingual embedding model initialized and ready.');
+  } catch (err) {
+    console.warn('Embedding model warm-up notice:', err.message);
+  }
 }
 
 function chunkText(text, max = 600) {
@@ -94,4 +106,4 @@ async function answer(message, history = []) {
   return { hits, reply: res.text };
 }
 
-module.exports = { indexDoc, answer };
+module.exports = { indexDoc, answer, warmUp };

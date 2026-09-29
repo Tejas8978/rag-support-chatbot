@@ -1,6 +1,9 @@
 require('dotenv').config();
-// Force Google DNS — JIO's default DNS blocks MongoDB Atlas SRV lookups
-require('dns').setServers(['8.8.8.8', '8.8.4.4']);
+const dns = require('dns');
+// Prefer IPv4 first to avoid 30s IPv6 connect timeouts on Windows
+dns.setDefaultResultOrder('ipv4first');
+// Fast DNS servers for Atlas SRV lookup (Cloudflare + Google DNS)
+dns.setServers(['1.1.1.1', '1.0.0.1', '8.8.8.8']);
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -18,9 +21,16 @@ app.get('/api/docs', wrap(async (_, res) => res.json(await Doc.find().sort({ cre
 app.post('/api/docs', wrap(async (req, res) => {
   const { title, text, lang } = req.body;
   if (!title?.trim() || !text?.trim()) return res.status(400).json({ error: 'Add a title and some text.' });
-  const doc = await Doc.create({ title: title.trim(), text: text.trim(), lang: lang || 'auto' });
-  await rag.indexDoc(doc);
-  res.json(doc);
+  let doc;
+  try {
+    doc = await Doc.create({ title: title.trim(), text: text.trim(), lang: lang || 'auto' });
+    await rag.indexDoc(doc);
+    res.json(doc);
+  } catch (err) {
+    if (doc?._id) await Doc.findByIdAndDelete(doc._id);
+    console.error('Failed to index document:', err);
+    res.status(500).json({ error: 'Failed to index document: ' + (err.message || 'Unknown error') });
+  }
 }));
 
 app.delete('/api/docs/:id', wrap(async (req, res) => {
@@ -44,7 +54,13 @@ app.post('/api/chat', wrap(async (req, res) => {
   res.json({ reply, sources: hits.map(h => ({ title: h.title, text: h.text, score: +h.score.toFixed(3) })) });
 }));
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_support').then(() => {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_support', {
+  family: 4,
+  serverSelectionTimeoutMS: 15000,
+}).then(() => {
   const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`Running at http://localhost:${port}`));
+  app.listen(port, () => {
+    console.log(`Running at http://localhost:${port}`);
+    if (rag.warmUp) rag.warmUp();
+  });
 }).catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });

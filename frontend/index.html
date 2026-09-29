@@ -42,7 +42,10 @@ aside h2,.kb h2{font-size:15px;margin:0 0 8px}
 <body>
 <header>
   <h1>Support Assistant</h1>
-  <nav><button class="on" data-tab="chat">Chat</button><button data-tab="kb">Knowledge base</button></nav>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="apiStatus" style="font-size:12px;opacity:0.9;padding:3px 10px;border-radius:12px;background:rgba(255,255,255,0.12);font-weight:500">● Checking…</span>
+    <nav><button class="on" data-tab="chat">Chat</button><button data-tab="kb">Knowledge base</button></nav>
+  </div>
 </header>
 <main>
   <section id="chat" class="chat">
@@ -70,22 +73,73 @@ aside h2,.kb h2{font-size:15px;margin:0 0 8px}
 <script>
 const $ = s => document.querySelector(s);
 const sid = localStorage.sid || (localStorage.sid = crypto.randomUUID());
-const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ? '/api'
-  : 'https://rag-support-chatbot-cqpk.onrender.com/api';
+
+function getApiBase() {
+  const host = window.location.hostname;
+  const port = window.location.port;
+  const proto = window.location.protocol;
+
+  // Local filesystem preview (file:///)
+  if (proto === 'file:') {
+    return 'http://localhost:3000/api';
+  }
+  // If running on localhost or 127.0.0.1 on a live-server/dev server (e.g. 5500, 5173, etc.)
+  if ((host === 'localhost' || host === '127.0.0.1') && port && port !== '3000') {
+    return 'http://localhost:3000/api';
+  }
+  // If served directly by backend on port 3000 or on Render domain
+  if (host === 'localhost' || host === '127.0.0.1' || host.includes('onrender.com')) {
+    return '/api';
+  }
+  return 'https://rag-support-chatbot-cqpk.onrender.com/api';
+}
+
+const API_BASE = getApiBase();
+
+async function checkStatus() {
+  const el = $('#apiStatus');
+  if (!el) return;
+  try {
+    const res = await fetch(API_BASE + '/docs', { method: 'GET' });
+    if (res.ok) {
+      el.textContent = '● Backend Connected';
+      el.style.color = '#74c69d';
+    } else {
+      el.textContent = '▲ Server Error (' + res.status + ')';
+      el.style.color = '#f5a524';
+    }
+  } catch (e) {
+    el.textContent = '● Backend Offline';
+    el.style.color = '#ff8585';
+  }
+}
 
 async function api(path, opt = {}) {
-  const r = await fetch(API_BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || 'Request failed');
+  let r;
+  try {
+    r = await fetch(API_BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+  } catch (err) {
+    const target = API_BASE.startsWith('http') ? API_BASE : `${window.location.origin}${API_BASE}`;
+    throw new Error(`Cannot connect to backend (${target}). Please verify the backend is running ("npm start" in backend folder).`);
+  }
+  const text = await r.text();
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    throw new Error(`Server response error (${r.status}): ${text.slice(0, 120) || 'Check server logs.'}`);
+  }
+  if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`);
   return d;
 }
+
 function bubble(role, text) {
   $('#log .empty')?.remove();
   const d = document.createElement('div');
   d.className = 'msg ' + role; d.textContent = text;
   $('#log').append(d); $('#log').scrollTop = 1e9; return d;
 }
+
 function showSources(list) {
   const box = $('#srcs'); box.replaceChildren();
   if (!list.length) { const p = document.createElement('p'); p.className = 'src'; p.textContent = 'No relevant passage found for this question.'; box.append(p); return; }
@@ -95,6 +149,7 @@ function showSources(list) {
     d.append(b, s.text); box.append(d);
   });
 }
+
 $('#sendForm').onsubmit = async e => {
   e.preventDefault();
   const message = $('#msg').value.trim(); if (!message) return;
@@ -105,41 +160,86 @@ $('#sendForm').onsubmit = async e => {
     wait.textContent = d.reply; showSources(d.sources);
   } catch (err) { wait.textContent = err.message; }
 };
+
 async function loadHistory() {
   const h = await api('/chat/' + sid).catch(() => []);
   if (!h.length) { const p = document.createElement('p'); p.className = 'empty'; p.textContent = 'Ask a question about orders, refunds or your account.'; $('#log').append(p); }
   h.forEach(m => bubble(m.role === 'user' ? 'user' : 'bot', m.content));
 }
+
 async function loadDocs() {
-  const docs = await api('/docs'); const box = $('#docs'); box.replaceChildren();
-  docs.forEach(d => {
-    const row = document.createElement('div'); row.className = 'doc';
-    const info = document.createElement('div');
-    const t = document.createElement('strong'); t.textContent = d.title;
-    const p = document.createElement('p'); p.textContent = d.text.slice(0, 140) + (d.text.length > 140 ? '…' : '');
-    info.append(t, p);
-    const del = document.createElement('button'); del.className = 'btn ghost'; del.textContent = 'Delete';
-    del.onclick = async () => { await api('/docs/' + d._id, { method: 'DELETE' }); loadDocs(); };
-    row.append(info, del); box.append(row);
-  });
-  if (!docs.length) box.textContent = 'No content yet. Add your first FAQ above.';
-}
-$('#docForm').onsubmit = async e => {
-  e.preventDefault(); $('#err').textContent = '';
-  const btn = e.submitter; btn.disabled = true; btn.textContent = 'Indexing…';
+  const box = $('#docs');
   try {
-    await api('/docs', { method: 'POST', body: JSON.stringify({ title: $('#title').value, text: $('#text').value }) });
-    $('#title').value = ''; $('#text').value = ''; loadDocs();
-  } catch (err) { $('#err').textContent = err.message; }
-  btn.disabled = false; btn.textContent = 'Add and index';
+    const docs = await api('/docs');
+    box.replaceChildren();
+    docs.forEach(d => {
+      const row = document.createElement('div'); row.className = 'doc';
+      const info = document.createElement('div');
+      const t = document.createElement('strong'); t.textContent = d.title;
+      const p = document.createElement('p'); p.textContent = d.text.slice(0, 140) + (d.text.length > 140 ? '…' : '');
+      info.append(t, p);
+      const del = document.createElement('button'); del.className = 'btn ghost'; del.textContent = 'Delete';
+      del.onclick = async () => {
+        del.disabled = true;
+        try {
+          await api('/docs/' + d._id, { method: 'DELETE' });
+          loadDocs();
+        } catch (err) {
+          alert('Delete failed: ' + err.message);
+          del.disabled = false;
+        }
+      };
+      row.append(info, del); box.append(row);
+    });
+    if (!docs.length) box.textContent = 'No content yet. Add your first FAQ above.';
+  } catch (err) {
+    box.textContent = 'Could not load documents: ' + err.message;
+  }
+}
+
+$('#docForm').onsubmit = async e => {
+  e.preventDefault();
+  const errEl = $('#err');
+  errEl.textContent = '';
+  errEl.style.color = '#a52a2a';
+  const btn = e.submitter || $('#docForm button');
+  btn.disabled = true;
+  btn.textContent = 'Indexing…';
+  try {
+    const title = $('#title').value.trim();
+    const text = $('#text').value.trim();
+    if (!title || !text) {
+      throw new Error('Please enter both a title and some text.');
+    }
+    await api('/docs', { method: 'POST', body: JSON.stringify({ title, text }) });
+    $('#title').value = '';
+    $('#text').value = '';
+    errEl.textContent = '✓ Document successfully indexed!';
+    errEl.style.color = '#2d6a4f';
+    setTimeout(() => { if (errEl.textContent.startsWith('✓')) errEl.textContent = ''; }, 4000);
+    loadDocs();
+    checkStatus();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.color = '#a52a2a';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add and index';
+  }
 };
+
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   $('#chat').style.display = b.dataset.tab === 'chat' ? 'grid' : 'none';
   $('#kb').style.display = b.dataset.tab === 'kb' ? 'block' : 'none';
-  if (b.dataset.tab === 'kb') loadDocs();
+  if (b.dataset.tab === 'kb') {
+    loadDocs();
+    checkStatus();
+  }
 });
+
 loadHistory();
+checkStatus();
 </script>
 </body>
 </html>
