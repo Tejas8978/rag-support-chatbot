@@ -1,6 +1,10 @@
 require('dotenv').config();
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+dns.setServers(['1.1.1.1', '1.0.0.1', '8.8.8.8']);
 const mongoose = require('mongoose');
-const { Doc } = require('./models');
+const { Doc, User } = require('./models');
+const { hashPassword } = require('./auth');
 const rag = require('./rag');
 
 const docs = [
@@ -10,7 +14,33 @@ const docs = [
 ];
 
 (async () => {
-  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_support');
-  for (const d of docs) { const doc = await Doc.create(d); await rag.indexDoc(doc); console.log('Indexed', d.title); }
+  console.log('Connecting to MongoDB Atlas...');
+  await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_support', {
+    family: 4,
+    serverSelectionTimeoutMS: 15000,
+  });
+
+  // Seed default demo user if not present
+  const existingUser = await User.findOne({ email: 'demo@example.com' });
+  if (!existingUser) {
+    await User.create({
+      name: 'Demo Support Lead',
+      email: 'demo@example.com',
+      password: hashPassword('demo1234'),
+      role: 'admin'
+    });
+    console.log('Seeded demo user: demo@example.com / demo1234');
+  }
+
+  for (const d of docs) {
+    const existing = await Doc.findOne({ title: d.title });
+    if (!existing) {
+      const doc = await Doc.create(d);
+      await rag.indexDoc(doc);
+      console.log('Indexed:', d.title);
+    }
+  }
+
+  console.log('Seed completed successfully!');
   process.exit(0);
 })();

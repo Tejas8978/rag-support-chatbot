@@ -37,14 +37,43 @@ aside h2,.kb h2{font-size:15px;margin:0 0 8px}
 .doc{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
 .doc p{margin:2px 0 0;color:var(--muted);font-size:14px}
 #err{color:#a52a2a;min-height:1.4em;margin:6px 0 0}
+/* Authentication & Profile Styles */
+.auth-box{max-width:440px;margin:32px auto;padding:28px 24px;border-radius:12px;background:var(--card);border:1px solid var(--line);box-shadow:0 8px 30px rgba(14,59,67,0.06)}
+.auth-tabs{display:flex;background:var(--paper);padding:4px;border-radius:8px;margin-bottom:20px;gap:4px}
+.auth-tab{flex:1;padding:9px;border:0;background:none;font:inherit;font-weight:600;color:var(--muted);border-radius:6px;cursor:pointer;transition:all 0.15s ease}
+.auth-tab.active{background:var(--card);color:var(--ink);box-shadow:0 2px 6px rgba(0,0,0,0.06)}
+.field{margin-bottom:14px;display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:600;color:var(--ink)}
+.field-pw{position:relative}
+.field-pw input{padding-right:42px}
+.pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);font-size:15px;padding:4px}
+.btn.block{width:100%;margin-top:8px}
+.demo-pill{background:#eef6f5;border:1px dashed #7da7a1;padding:12px 14px;border-radius:8px;margin-top:18px;font-size:13px;color:var(--ink);display:flex;align-items:center;justify-content:space-between}
+.demo-pill button{background:var(--ink);color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer}
+.auth-status{margin-top:12px;padding:10px 12px;border-radius:6px;font-size:13px;display:none}
+.auth-status.err{background:#fee2e2;color:#991b1b;display:block}
+.auth-status.ok{background:#dcfce7;color:#166534;display:block}
+.profile-card{text-align:center;padding:12px 0}
+.avatar-circle{width:64px;height:64px;border-radius:50%;background:var(--ink);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;margin:0 auto 12px;border:2px solid var(--accent)}
+.role-badge{display:inline-block;padding:3px 10px;border-radius:12px;background:var(--paper);color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;margin:4px 0 16px;letter-spacing:0.5px}
+.meta-list{text-align:left;background:var(--paper);padding:14px 16px;border-radius:8px;margin-bottom:20px;font-size:13px;display:flex;flex-direction:column;gap:8px}
+.meta-item{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:6px}
+.meta-item:last-child{border-bottom:none;padding-bottom:0}
 </style>
 </head>
 <body>
 <header>
-  <h1>Support Assistant</h1>
-  <div style="display:flex;align-items:center;gap:12px">
+  <div style="display:flex;align-items:center;gap:14px">
+    <h1>Support Assistant</h1>
     <span id="apiStatus" style="font-size:12px;opacity:0.9;padding:3px 10px;border-radius:12px;background:rgba(255,255,255,0.12);font-weight:500">● Checking…</span>
-    <nav><button class="on" data-tab="chat">Chat</button><button data-tab="kb">Knowledge base</button></nav>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <nav>
+      <button class="on" data-tab="chat">Chat</button>
+      <button data-tab="kb">Knowledge base</button>
+      <button data-tab="auth" id="accountTabBtn">Account</button>
+    </nav>
+    <div id="authHeaderChip"></div>
   </div>
 </header>
 <main>
@@ -68,6 +97,64 @@ aside h2,.kb h2{font-size:15px;margin:0 0 8px}
       <div id="err" role="alert"></div>
     </form>
     <div id="docs"></div>
+  </section>
+
+  <section id="auth" class="auth-box panel" style="display:none">
+    <div id="authFormContainer">
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-auth-mode="login">Sign In</button>
+        <button type="button" class="auth-tab" data-auth-mode="register">Create Account</button>
+      </div>
+
+      <form id="authForm">
+        <div class="field" id="nameField" style="display:none">
+          <label for="authName">Full Name</label>
+          <input id="authName" placeholder="Enter your full name" autocomplete="name">
+        </div>
+
+        <div class="field">
+          <label for="authEmail">Email Address</label>
+          <input id="authEmail" type="email" placeholder="name@example.com" autocomplete="email" required>
+        </div>
+
+        <div class="field">
+          <label for="authPassword">Password</label>
+          <div class="field-pw">
+            <input id="authPassword" type="password" placeholder="At least 6 characters" autocomplete="current-password" required>
+            <button type="button" class="pw-toggle" id="pwToggle" aria-label="Toggle password visibility">👁️</button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn block" id="authSubmitBtn">Sign In</button>
+
+        <div id="authStatus" class="auth-status" role="alert"></div>
+
+        <div class="demo-pill" id="demoPill">
+          <div>
+            <strong>Quick Demo Account</strong>
+            <div style="color:var(--muted);font-size:11px">demo@example.com / demo1234</div>
+          </div>
+          <button type="button" id="useDemoBtn">Fill & Login</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="authProfileContainer" style="display:none">
+      <div class="profile-card">
+        <div class="avatar-circle" id="profileAvatar">U</div>
+        <h2 id="profileName" style="margin:0 0 4px;font-size:18px">User Name</h2>
+        <div id="profileEmail" style="color:var(--muted);font-size:14px">user@example.com</div>
+        <div class="role-badge" id="profileRole">user</div>
+
+        <div class="meta-list">
+          <div class="meta-item"><span>Database:</span> <strong>MongoDB Atlas (Connected)</strong></div>
+          <div class="meta-item"><span>Status:</span> <strong style="color:#2d6a4f">Authenticated</strong></div>
+          <div class="meta-item"><span>User ID:</span> <span id="profileId" style="font-family:monospace;font-size:11px">...</span></div>
+        </div>
+
+        <button type="button" class="btn ghost block" id="profileLogoutBtn">Sign Out</button>
+      </div>
+    </div>
   </section>
 </main>
 <script>
@@ -116,8 +203,12 @@ async function checkStatus() {
 
 async function api(path, opt = {}) {
   let r;
+  const token = localStorage.getItem('token');
+  const headers = { 'Content-Type': 'application/json', ...(opt.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   try {
-    r = await fetch(API_BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+    r = await fetch(API_BASE + path, { ...opt, headers });
   } catch (err) {
     const target = API_BASE.startsWith('http') ? API_BASE : `${window.location.origin}${API_BASE}`;
     throw new Error(`Cannot connect to backend (${target}). Please verify the backend is running ("npm start" in backend folder).`);
@@ -132,6 +223,177 @@ async function api(path, opt = {}) {
   if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`);
   return d;
 }
+
+// Authentication Logic
+let currentUser = null;
+let currentAuthMode = 'login'; // 'login' | 'register'
+
+function switchTab(tab) {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  $('#chat').style.display = tab === 'chat' ? 'grid' : 'none';
+  $('#kb').style.display = tab === 'kb' ? 'block' : 'none';
+  $('#auth').style.display = tab === 'auth' ? 'block' : 'none';
+  if (tab === 'kb') {
+    loadDocs();
+    checkStatus();
+  }
+  if (tab === 'auth') {
+    renderAuthView();
+  }
+}
+
+function setAuthMode(mode) {
+  currentAuthMode = mode;
+  document.querySelectorAll('.auth-tab').forEach(b => b.classList.toggle('active', b.dataset.authMode === mode));
+  $('#nameField').style.display = mode === 'register' ? 'flex' : 'none';
+  $('#authSubmitBtn').textContent = mode === 'register' ? 'Create Account' : 'Sign In';
+  $('#demoPill').style.display = mode === 'login' ? 'flex' : 'none';
+  setAuthStatus('', '');
+}
+
+function setAuthStatus(msg, type = '') {
+  const el = $('#authStatus');
+  el.className = 'auth-status ' + type;
+  el.textContent = msg;
+}
+
+function updateUserUI() {
+  const chip = $('#authHeaderChip');
+  const navBtn = $('#accountTabBtn');
+  if (currentUser) {
+    chip.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;background:rgba(255,255,255,0.18);padding:3px 10px;border-radius:14px;color:#fff;font-weight:600">
+          👤 ${currentUser.name}
+        </span>
+        <button id="headerLogoutBtn" class="btn ghost" style="padding:3px 9px;font-size:11px;color:#fff;border-color:rgba(255,255,255,0.3)">Logout</button>
+      </div>
+    `;
+    $('#headerLogoutBtn').onclick = logout;
+    if (navBtn) navBtn.textContent = 'Account';
+  } else {
+    chip.innerHTML = `
+      <button id="headerLoginBtn" class="btn" style="padding:4px 12px;font-size:12px;background:var(--accent);color:var(--ink);font-weight:700">Login</button>
+    `;
+    $('#headerLoginBtn').onclick = () => switchTab('auth');
+    if (navBtn) navBtn.textContent = 'Login';
+  }
+  renderAuthView();
+}
+
+function renderAuthView() {
+  if (currentUser) {
+    $('#authFormContainer').style.display = 'none';
+    $('#authProfileContainer').style.display = 'block';
+    $('#profileAvatar').textContent = (currentUser.name || 'U').charAt(0).toUpperCase();
+    $('#profileName').textContent = currentUser.name;
+    $('#profileEmail').textContent = currentUser.email;
+    $('#profileRole').textContent = currentUser.role || 'user';
+    $('#profileId').textContent = currentUser.id || 'N/A';
+  } else {
+    $('#authFormContainer').style.display = 'block';
+    $('#authProfileContainer').style.display = 'none';
+  }
+}
+
+async function checkAuth() {
+  const token = localStorage.getItem('token');
+  if (!token) {
+    currentUser = null;
+    updateUserUI();
+    return;
+  }
+  try {
+    const res = await api('/auth/me');
+    if (res.authenticated && res.user) {
+      currentUser = res.user;
+    } else {
+      currentUser = null;
+      localStorage.removeItem('token');
+    }
+  } catch (e) {
+    currentUser = null;
+  }
+  updateUserUI();
+}
+
+async function logout() {
+  try {
+    await api('/auth/logout', { method: 'POST' });
+  } catch (e) {}
+  localStorage.removeItem('token');
+  currentUser = null;
+  updateUserUI();
+  setAuthStatus('You have been signed out.', 'ok');
+}
+
+// Auth Tab Switching
+document.querySelectorAll('.auth-tab').forEach(btn => {
+  btn.onclick = () => setAuthMode(btn.dataset.authMode);
+});
+
+// Password Toggle
+$('#pwToggle').onclick = () => {
+  const pw = $('#authPassword');
+  pw.type = pw.type === 'password' ? 'text' : 'password';
+  $('#pwToggle').textContent = pw.type === 'password' ? '👁️' : '🙈';
+};
+
+// Quick Demo Account Click
+$('#useDemoBtn').onclick = async () => {
+  $('#authEmail').value = 'demo@example.com';
+  $('#authPassword').value = 'demo1234';
+  $('#authForm').requestSubmit();
+};
+
+// Profile Sign Out
+$('#profileLogoutBtn').onclick = logout;
+
+// Auth Form Submit
+$('#authForm').onsubmit = async e => {
+  e.preventDefault();
+  setAuthStatus('', '');
+  const btn = $('#authSubmitBtn');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Authenticating…';
+
+  try {
+    const email = $('#authEmail').value.trim();
+    const password = $('#authPassword').value;
+
+    let res;
+    if (currentAuthMode === 'register') {
+      const name = $('#authName').value.trim();
+      if (!name) throw new Error('Please enter your name.');
+      res = await api('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ name, email, password })
+      });
+      setAuthStatus('Account created in MongoDB! Welcome, ' + res.user.name, 'ok');
+    } else {
+      res = await api('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password })
+      });
+      setAuthStatus('Welcome back, ' + res.user.name, 'ok');
+    }
+
+    if (res.token) {
+      localStorage.setItem('token', res.token);
+      currentUser = res.user;
+      updateUserUI();
+      $('#authEmail').value = '';
+      $('#authPassword').value = '';
+      if ($('#authName')) $('#authName').value = '';
+    }
+  } catch (err) {
+    setAuthStatus(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+};
 
 function bubble(role, text) {
   $('#log .empty')?.remove();
@@ -229,17 +491,12 @@ $('#docForm').onsubmit = async e => {
 };
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  $('#chat').style.display = b.dataset.tab === 'chat' ? 'grid' : 'none';
-  $('#kb').style.display = b.dataset.tab === 'kb' ? 'block' : 'none';
-  if (b.dataset.tab === 'kb') {
-    loadDocs();
-    checkStatus();
-  }
+  switchTab(b.dataset.tab);
 });
 
 loadHistory();
 checkStatus();
+checkAuth();
 </script>
 </body>
 </html>

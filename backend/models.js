@@ -16,7 +16,22 @@ const Chunk = model('Chunk', new Schema({
 
 const Conv = model('Conv', new Schema({
   sessionId: { type: String, index: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', index: true, sparse: true },
   messages: [{ role: String, content: String, sources: [String], at: { type: Date, default: Date.now } }]
 }));
 
-module.exports = { Doc, Chunk, Conv };
+const User = model('User', new Schema({
+  name: { type: String, required: true, trim: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  password: { type: String, required: true },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  createdAt: { type: Date, default: Date.now }
+}));
+
+const Session = model('Session', new Schema({
+  token: { type: String, required: true, unique: true, index: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 7 } // expires in 7 days
+}));
+
+module.exports = { Doc, Chunk, Conv, User, Session };
