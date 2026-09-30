@@ -15,7 +15,7 @@ function detectLanguage(text) {
 }
 
 // Multilingual embeddings (100 languages), runs locally — no API key needed.
-async function embed(text, type) {
+async function getExtractor() {
   if (!extractor) {
     const { pipeline, env } = await import('@xenova/transformers');
     env.allowLocalModels = false;
@@ -23,8 +23,35 @@ async function embed(text, type) {
       quantized: true,
     });
   }
-  const out = await extractor(`${type}: ${text}`, { pooling: 'mean', normalize: true });
+  return extractor;
+}
+
+async function embed(text, type) {
+  const ext = await getExtractor();
+  const out = await ext(`${type}: ${text}`, { pooling: 'mean', normalize: true });
   return Array.from(out.data);
+}
+
+// Vectorized batch embedding: processes multiple chunks in 1 fast ONNX pass
+async function embedBatch(texts, type, batchSize = 8) {
+  if (!texts.length) return [];
+  const ext = await getExtractor();
+  const results = [];
+  const dim = 384;
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const batch = texts.slice(i, i + batchSize);
+    const inputs = batch.map(t => `${type}: ${t}`);
+    const out = await ext(inputs, { pooling: 'mean', normalize: true });
+    for (let j = 0; j < batch.length; j++) {
+      const start = j * dim;
+      results.push(Array.from(out.data.slice(start, start + dim)));
+    }
+    // Yield event loop between batches so small memory instances (e.g. Render 512MB) can GC
+    if (i + batchSize < texts.length) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
+  return results;
 }
 
 async function warmUp() {
@@ -36,7 +63,7 @@ async function warmUp() {
   }
 }
 
-function chunkText(text, max = 600) {
+function chunkText(text, max = 800) {
   const parts = text.split(/\n{2,}|(?<=[.!?।])\s+/).map(s => s.trim()).filter(Boolean);
   const out = []; let cur = '';
   for (const p of parts) {
@@ -49,19 +76,28 @@ function chunkText(text, max = 600) {
 
 async function indexDoc(doc) {
   await Chunk.deleteMany({ docId: doc._id });
-  const chunks = chunkText(doc.text);
-  for (const text of chunks) {
-    await Chunk.create({
-      docId: doc._id,
-      title: doc.title,
-      text,
-      category: doc.category || 'General',
-      embedding: await embed(text, 'passage')
-    });
+  const chunks = chunkText(doc.text, 800);
+  if (!chunks.length) return 0;
+
+  // Batch embed all chunks in parallel passes instead of slow sequential calls
+  const embeddings = await embedBatch(chunks, 'passage', 8);
+
+  const chunkDocs = chunks.map((text, idx) => ({
+    docId: doc._id,
+    title: doc.title,
+    text,
+    category: doc.category || 'General',
+    embedding: embeddings[idx]
+  }));
+
+  if (chunkDocs.length > 0) {
+    await Chunk.insertMany(chunkDocs);
   }
+
   await Doc.findByIdAndUpdate(doc._id, { chunkCount: chunks.length });
   return chunks.length;
 }
+
 
 const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
 

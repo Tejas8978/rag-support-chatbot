@@ -282,9 +282,12 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_suppo
 }).then(async () => {
   const port = process.env.PORT || 3000;
   await ensureDefaultUser();
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Running at http://localhost:${port}`);
     if (rag.warmUp) rag.warmUp();
   });
+  server.keepAliveTimeout = 120000;
+  server.headersTimeout = 125000;
 }).catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });
+
 

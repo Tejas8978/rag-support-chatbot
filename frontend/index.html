@@ -789,9 +789,14 @@ input:focus, textarea:focus, select:focus{
 <div class="bg-orb orb-3"></div>
 
 <header>
-  <div style="display:flex;align-items:center;gap:14px">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <h1><span class="logo-icon">✨</span> Support Assistant</h1>
     <div id="apiStatus" class="status-pill"><span class="status-dot"></span> <span>Checking…</span></div>
+    <select id="serverSelect" style="padding:4px 8px;font-size:11px;font-weight:700;border-radius:14px;background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);cursor:pointer" title="Switch backend endpoint">
+      <option value="auto" style="color:var(--ink)">Auto-Detect</option>
+      <option value="render" style="color:var(--ink)">Render Cloud ☁️</option>
+      <option value="local" style="color:var(--ink)">Localhost:3000 💻</option>
+    </select>
   </div>
   <div style="display:flex;align-items:center;gap:12px">
     <nav>
@@ -1050,8 +1055,12 @@ let currentUser = null;
 let currentAuthMode = 'login';
 let isStreaming = false;
 
-// API Base Resolution
+// API Base Resolution with User Override & Auto-Detection
 function getApiBase() {
+  const pref = localStorage.getItem('server_pref') || 'auto';
+  if (pref === 'render') return 'https://rag-support-chatbot-cqpk.onrender.com/api';
+  if (pref === 'local') return 'http://localhost:3000/api';
+
   const host = window.location.hostname;
   const port = window.location.port;
   const proto = window.location.protocol;
@@ -1060,7 +1069,16 @@ function getApiBase() {
   if (host === 'localhost' || host === '127.0.0.1' || host.includes('onrender.com')) return '/api';
   return 'https://rag-support-chatbot-cqpk.onrender.com/api';
 }
-const API_BASE = getApiBase();
+let API_BASE = getApiBase();
+
+$('#serverSelect').value = localStorage.getItem('server_pref') || 'auto';
+$('#serverSelect').onchange = e => {
+  localStorage.setItem('server_pref', e.target.value);
+  API_BASE = getApiBase();
+  checkStatus();
+  loadDocs();
+  checkAuth();
+};
 
 async function api(path, opt = {}) {
   const token = localStorage.getItem('token');
@@ -1069,9 +1087,15 @@ async function api(path, opt = {}) {
 
   let r;
   try {
-    r = await fetch(API_BASE + path, { ...opt, headers });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s timeout
+    r = await fetch(API_BASE + path, { ...opt, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
   } catch (err) {
-    throw new Error(`Cannot connect to server at ${API_BASE}. Please ensure backend is running.`);
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after 120s. Server is processing or waking up.`);
+    }
+    throw new Error(`Cannot connect to server at ${API_BASE}. Please ensure backend is running or select another server.`);
   }
   const text = await r.text();
   let d;
@@ -1088,6 +1112,10 @@ async function checkStatus() {
     if (res.ok) {
       el.innerHTML = '<span class="status-dot"></span> <span>Backend Connected</span>';
       el.style.color = '#74c69d';
+    } else if (res.status === 502 || res.status === 503) {
+      el.innerHTML = '<span class="status-dot" style="background:#f5a524"></span> <span>Render Waking Up (~25s)…</span>';
+      el.style.color = '#f5a524';
+      setTimeout(checkStatus, 4000);
     } else {
       el.innerHTML = '<span class="status-dot" style="background:#f5a524;animation:none"></span> <span>Status ' + res.status + '</span>';
       el.style.color = '#f5a524';
@@ -1097,6 +1125,7 @@ async function checkStatus() {
     el.style.color = '#ff8585';
   }
 }
+
 
 // Tab Switching
 function switchTab(tab) {
@@ -1878,7 +1907,13 @@ async function loadDocs() {
       box.append(card);
     });
   } catch (err) {
-    box.innerHTML = `<div style="color:#ef4444;padding:12px">Failed to load documents: ${err.message}</div>`;
+    box.innerHTML = `
+      <div style="color:#b91c1c;padding:16px;background:rgba(239,68,68,0.08);border-radius:12px;border:1px solid rgba(239,68,68,0.25);margin-top:10px">
+        <strong>Connection Notice:</strong> ${err.message}<br>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted)">Note: If using Render Free Tier, the backend spins down when idle and takes ~30 seconds to wake up.</div>
+        <button type="button" class="btn small" style="margin-top:12px" onclick="loadDocs();checkStatus()">🔄 Retry Loading Documents</button>
+      </div>
+    `;
   }
 }
 
@@ -1917,24 +1952,26 @@ $('#docForm').onsubmit = async e => {
   const btn = $('#addDocBtn');
   btn.disabled = true;
   const original = btn.innerHTML;
-  btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid var(--ink);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;margin-right:6px"></span> Indexing…';
+
+  const title = $('#title').value.trim();
+  const text = $('#text').value.trim();
+  const category = $('#docCategory').value;
+  const chunkCount = Math.ceil(text.length / 800) || 1;
+
+  btn.innerHTML = `<span style="display:inline-block;width:12px;height:12px;border:2px solid var(--ink);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;margin-right:6px"></span> Vectorizing & indexing ${chunkCount} chunk${chunkCount === 1 ? '' : 's'}…`;
 
   try {
     const editId = $('#editDocId').value;
-    const title = $('#title').value.trim();
-    const text = $('#text').value.trim();
-    const category = $('#docCategory').value;
-
     if (editId) {
       await api('/docs/' + editId, { method: 'PUT', body: JSON.stringify({ title, text, category }) });
       errEl.textContent = '✓ Document successfully updated and re-indexed!';
     } else {
       await api('/docs', { method: 'POST', body: JSON.stringify({ title, text, category }) });
-      errEl.textContent = '✓ Document successfully indexed into MongoDB!';
+      errEl.textContent = `✓ Successfully indexed "${title}" (${chunkCount} chunks) into MongoDB Atlas!`;
     }
     errEl.style.color = '#10b981';
     cancelEdit();
-    loadDocs();
+    await loadDocs();
   } catch (err) {
     errEl.textContent = err.message;
     errEl.style.color = '#ef4444';
@@ -1943,6 +1980,7 @@ $('#docForm').onsubmit = async e => {
     btn.innerHTML = original;
   }
 };
+
 
 // Filter pills & Search
 $('#kbSearchInput').oninput = () => loadDocs();
