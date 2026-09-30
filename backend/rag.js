@@ -3,7 +3,6 @@ const { Chunk, Doc } = require('./models');
 
 const client = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 const MIN = parseFloat(process.env.RAG_MIN_SCORE || '0.50');
-let extractor;
 
 // Language detection helper
 function detectLanguage(text) {
@@ -14,17 +13,30 @@ function detectLanguage(text) {
   return { code: 'en', name: 'English', label: 'English' };
 }
 
-// Multilingual embeddings (100 languages), runs locally — no API key needed.
+let extractor = null;
+let extractorPromise = null;
+
+// Lightweight embeddings model (22MB download, 200MB RAM — fits comfortably on Render 512MB free tier)
 async function getExtractor() {
-  if (!extractor) {
-    const { pipeline, env } = await import('@xenova/transformers');
-    env.allowLocalModels = false;
-    extractor = await pipeline('feature-extraction', 'Xenova/multilingual-e5-small', {
-      quantized: true,
+  if (extractor) return extractor;
+  if (!extractorPromise) {
+    extractorPromise = (async () => {
+      const { pipeline, env } = await import('@xenova/transformers');
+      env.allowLocalModels = false;
+      const modelName = process.env.EMBEDDING_MODEL || 'Xenova/all-MiniLM-L6-v2';
+      const ext = await pipeline('feature-extraction', modelName, {
+        quantized: true,
+      });
+      extractor = ext;
+      return ext;
+    })().catch(err => {
+      extractorPromise = null;
+      throw err;
     });
   }
-  return extractor;
+  return extractorPromise;
 }
+
 
 async function embed(text, type) {
   const ext = await getExtractor();
