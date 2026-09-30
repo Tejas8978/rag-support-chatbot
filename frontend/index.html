@@ -1182,6 +1182,23 @@
       font-size: 15px;
     }
 
+    .forgot-pw-link {
+      background: none;
+      border: 0;
+      color: var(--ink-mid);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      transition: all 0.2s ease;
+    }
+
+    .forgot-pw-link:hover {
+      color: #b47007;
+    }
+
     .demo-pill {
       background: linear-gradient(135deg, rgba(245, 165, 36, 0.15) 0%, rgba(245, 165, 36, 0.05) 100%);
       border: 1px solid rgba(245, 165, 36, 0.4);
@@ -1487,8 +1504,11 @@
             </div>
           </div>
 
-          <div class="field">
-            <label for="authPassword">Password</label>
+          <div class="field" id="passwordField">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <label for="authPassword">Password</label>
+              <button type="button" class="forgot-pw-link" id="forgotPwLink">Forgot password?</button>
+            </div>
             <div class="input-with-icon">
               <span class="input-icon">🔒</span>
               <input id="authPassword" type="password" placeholder="At least 6 characters"
@@ -1512,6 +1532,46 @@
             </div>
             <button type="button" id="useDemoBtn" class="demo-btn">Auto-Fill & Enter 🚀</button>
           </div>
+        </form>
+      </div>
+
+      <!-- Forgot Password View -->
+      <div id="forgotPwContainer" style="display:none">
+        <div class="auth-hero">
+          <div class="auth-icon-badge"><span id="forgotIconEmoji">🔑</span></div>
+          <h2 style="margin:0 0 4px;font-size:20px;font-weight:800">Reset Your Password</h2>
+          <p style="color:var(--muted);font-size:13px;margin:0">Enter your registered email address and we'll dispatch a 30-minute reset link.</p>
+        </div>
+
+        <form id="forgotPwForm">
+          <div class="field">
+            <label for="forgotEmail">Registered Email Address</label>
+            <div class="input-with-icon">
+              <span class="input-icon">✉️</span>
+              <input id="forgotEmail" type="email" placeholder="name@example.com" autocomplete="email" required>
+            </div>
+          </div>
+
+          <div id="newPasswordSection" style="display:none;margin-top:10px">
+            <div class="field">
+              <label for="newPassword">New Password</label>
+              <div class="input-with-icon">
+                <span class="input-icon">🔒</span>
+                <input id="newPassword" type="password" placeholder="At least 6 characters" autocomplete="new-password">
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" class="btn block btn-shimmer" id="forgotSubmitBtn" style="margin-top:14px">
+            <span>Send Reset Instructions</span>
+            <span style="font-size:15px">→</span>
+          </button>
+
+          <div id="forgotStatus" style="font-size:13px;margin-top:12px;text-align:center" role="alert"></div>
+
+          <button type="button" class="btn ghost block small" id="backToLoginBtn" style="margin-top:14px">
+            ← Back to Sign In
+          </button>
         </form>
       </div>
 
@@ -1641,6 +1701,8 @@
       currentAuthMode = mode;
       document.querySelectorAll('.auth-tab').forEach(b => b.classList.toggle('active', b.dataset.authMode === mode));
       const isReg = mode === 'register';
+      $('#authFormContainer').style.display = 'block';
+      $('#forgotPwContainer').style.display = 'none';
       $('#nameField').style.display = isReg ? 'flex' : 'none';
       $('#authTitle').textContent = isReg ? 'Create Account' : 'Welcome Back';
       $('#authSubtitle').textContent = isReg ? 'Register to manage the RAG knowledge base' : 'Secure authentication powered by MongoDB Atlas';
@@ -1683,6 +1745,7 @@
     function renderAuthView() {
       if (currentUser) {
         $('#authFormContainer').style.display = 'none';
+        $('#forgotPwContainer').style.display = 'none';
         $('#authProfileContainer').style.display = 'block';
         $('#profileAvatar').textContent = (currentUser.name || 'U').charAt(0).toUpperCase();
         $('#profileName').textContent = currentUser.name;
@@ -1690,9 +1753,103 @@
         $('#profileRole').textContent = currentUser.role || 'user';
         $('#profileRoleDesc').textContent = currentUser.role === 'admin' ? 'Full Knowledge Base Access (Add, Edit, Delete)' : 'Read-Only Chat Access';
       } else {
-        $('#authFormContainer').style.display = 'block';
+        if ($('#forgotPwContainer').style.display !== 'block') {
+          $('#authFormContainer').style.display = 'block';
+        }
         $('#authProfileContainer').style.display = 'none';
       }
+    }
+
+    function showForgotPassword() {
+      $('#authFormContainer').style.display = 'none';
+      $('#forgotPwContainer').style.display = 'block';
+      $('#authProfileContainer').style.display = 'none';
+      $('#forgotStatus').textContent = '';
+      $('#newPasswordSection').style.display = 'none';
+      $('#forgotSubmitBtn span').textContent = 'Send Reset Instructions';
+      setupInitialForgotSubmit();
+      const loginEmail = $('#authEmail').value.trim();
+      if (loginEmail) $('#forgotEmail').value = loginEmail;
+    }
+
+    function showLoginForm() {
+      $('#authFormContainer').style.display = 'block';
+      $('#forgotPwContainer').style.display = 'none';
+      $('#authProfileContainer').style.display = 'none';
+    }
+
+    $('#forgotPwLink').onclick = showForgotPassword;
+    $('#backToLoginBtn').onclick = showLoginForm;
+
+    function setupInitialForgotSubmit() {
+      $('#forgotPwForm').onsubmit = async e => {
+        e.preventDefault();
+        const email = $('#forgotEmail').value.trim();
+        const statusEl = $('#forgotStatus');
+        const btn = $('#forgotSubmitBtn');
+        btn.disabled = true;
+        statusEl.textContent = 'Processing request…';
+        statusEl.style.color = 'var(--muted)';
+
+        try {
+          const res = await api('/auth/forgot-password', {
+            method: 'POST',
+            body: JSON.stringify({ email })
+          });
+          statusEl.innerHTML = `
+            <div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:10px;padding:12px;margin-top:8px;text-align:left;color:#065f46">
+              <strong style="display:block;margin-bottom:4px">✓ Reset Instructions Dispatched!</strong>
+              <div style="font-size:12px;line-height:1.5">
+                ${res.message || 'A password reset link valid for 30 minutes has been sent to your email.'}
+              </div>
+              <div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(16,185,129,0.3);font-size:11px;color:#047857">
+                💡 Demo tip: You can now enter a new password below to update it instantly.
+              </div>
+            </div>
+          `;
+          $('#newPasswordSection').style.display = 'block';
+          $('#forgotSubmitBtn span').textContent = 'Update to New Password';
+
+          $('#forgotPwForm').onsubmit = async ev => {
+            ev.preventDefault();
+            const newPassword = $('#newPassword').value;
+            if (!newPassword || newPassword.length < 6) {
+              statusEl.textContent = 'New password must be at least 6 characters long.';
+              statusEl.style.color = '#ef4444';
+              return;
+            }
+            btn.disabled = true;
+            statusEl.textContent = 'Updating password…';
+            try {
+              const resetRes = await api('/auth/reset-password', {
+                method: 'POST',
+                body: JSON.stringify({ email, newPassword, resetToken: res.resetToken })
+              });
+              statusEl.innerHTML = `
+                <div style="background:rgba(16,185,129,0.1);border:1px solid #10b981;border-radius:10px;padding:10px;color:#065f46">
+                  ✓ ${resetRes.message}
+                </div>
+              `;
+              setTimeout(() => {
+                $('#authEmail').value = email;
+                $('#authPassword').value = newPassword;
+                showLoginForm();
+                setAuthStatus('✓ Password reset successful. Please sign in.', 'ok');
+              }, 1600);
+            } catch (err) {
+              statusEl.textContent = err.message;
+              statusEl.style.color = '#ef4444';
+            } finally {
+              btn.disabled = false;
+            }
+          };
+        } catch (err) {
+          statusEl.textContent = err.message;
+          statusEl.style.color = '#ef4444';
+        } finally {
+          btn.disabled = false;
+        }
+      };
     }
 
     async function checkAuth() {

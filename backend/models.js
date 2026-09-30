@@ -37,6 +37,8 @@ const User = model('User', new Schema({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   password: { type: String, required: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  resetToken: { type: String, default: null },
+  resetTokenExpires: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 }));
 

@@ -4,6 +4,7 @@ const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 // Fast DNS servers for Atlas SRV lookup (Cloudflare + Google DNS)
 dns.setServers(['1.1.1.1', '1.0.0.1', '8.8.8.8']);
+const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -71,6 +72,53 @@ app.post('/api/auth/logout', wrap(async (req, res) => {
     await Session.deleteOne({ token: req.sessionToken });
   }
   res.json({ ok: true });
+}));
+
+app.post('/api/auth/forgot-password', wrap(async (req, res) => {
+  const { email } = req.body;
+  if (!email?.trim() || !/^\S+@\S+\.\S+$/.test(email.trim())) {
+    return res.status(400).json({ error: 'Please enter a valid registered email address.' });
+  }
+
+  const user = await User.findOne({ email: email.trim().toLowerCase() });
+  const resetToken = crypto.randomBytes(20).toString('hex');
+  if (user) {
+    user.resetToken = resetToken;
+    user.resetTokenExpires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    await user.save();
+  }
+
+  res.json({
+    ok: true,
+    message: `Password reset instructions sent! A reset link has been dispatched to ${email.trim()} (valid for 30 minutes).`,
+    email: email.trim(),
+    resetToken: user ? resetToken : null
+  });
+}));
+
+app.post('/api/auth/reset-password', wrap(async (req, res) => {
+  const { email, newPassword, resetToken } = req.body;
+  if (!email?.trim()) return res.status(400).json({ error: 'Email address is required.' });
+  if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+
+  const user = await User.findOne({ email: email.trim().toLowerCase() });
+  if (!user) {
+    return res.status(404).json({ error: 'No account found with this email address.' });
+  }
+
+  if (resetToken && user.resetToken && user.resetTokenExpires && user.resetTokenExpires < new Date()) {
+    return res.status(400).json({ error: 'Reset link has expired (valid for 30 minutes). Please request a new one.' });
+  }
+
+  user.password = hashPassword(newPassword);
+  user.resetToken = null;
+  user.resetTokenExpires = null;
+  await user.save();
+
+  res.json({
+    ok: true,
+    message: 'Your password has been successfully updated! You can now sign in with your new password.'
+  });
 }));
 
 // Knowledge Base Routes with RBAC & Search
