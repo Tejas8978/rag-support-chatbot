@@ -1,8 +1,7 @@
 const { GoogleGenAI } = require('@google/genai');
 const { Chunk, Doc } = require('./models');
-
 const client = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
-const MIN = parseFloat(process.env.RAG_MIN_SCORE || '0.50');
+const MIN = parseFloat(process.env.RAG_MIN_SCORE || '0.28');
 
 // Language detection helper
 function detectLanguage(text) {
@@ -156,38 +155,86 @@ async function retrieve(query, k = 4, category = null) {
     .filter(c => c.score >= MIN);
 }
 
-const SYSTEM = `You are a helpful, friendly customer support assistant.
+const NO_CONTEXT_REPLIES = {
+  te: "క్షమించండి, మా సపోర్ట్ నాలెడ్జ్ బేస్‌లో ఈ సమాచారం అందుబాటులో లేదు. దయచేసి మా సపోర్ట్ డాక్యుమెంట్‌లకు సంబంధించిన ప్రశ్నను అడగండి.",
+  hi: "क्षमा करें, हमारे सपोर्ट नॉलेज बेस में यह जानकारी उपलब्ध नहीं है। कृपया हमारे सपोर्ट डॉक्यूमेंट्स से संबंधित प्रश्न पूछें।",
+  ta: "மன்னிக்கவும், எங்கள் ஆதரவு அறிவுத் தளத்தில் இந்தத் தகவல் கிடைக்கவில்லை. தயவுசெய்து எங்கள் ஆதரவு ஆவணங்கள் தொடர்பான கேள்வியைக் கேட்கவும்.",
+  kn: "ಕ್ಷಮಿಸಿ, ನಮ್ಮ ಬೆಂಬಲ ಜ್ಞಾನ ನೆಲೆಯಲ್ಲಿ ಈ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ನಮ್ಮ ಬೆಂಬಲ ದಾಖಲೆಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.",
+  en: "I'm sorry, but I couldn't find that information in our support knowledge base. Please ask a question related to our documented policies or support topics."
+};
 
-Behavior rules:
-1. GREETINGS & SMALL TALK (hi, hello, how are you, thanks, bye, etc.) — respond warmly and naturally like a real person. Be brief and friendly.
-2. SUPPORT QUESTIONS WITH CONTEXT — if CONTEXT passages are provided below the message, use them to give an accurate, specific answer.
-3. SUPPORT QUESTIONS WITHOUT CONTEXT — use your own general knowledge to give a genuinely helpful answer. Do NOT say "I don't have that info" when you actually know.
-4. LANGUAGE — always reply in the same language and script as the customer's message.
-5. FORMATTING — format clear explanations using clean Markdown (bullet points, bold text for key terms, numbered steps).
-6. ACCURACY — never invent specific prices, policies, or dates that aren't in the context.
-7. TONE — keep answers concise, warm, and easy to understand.`;
+const SYSTEM = `You are a strict Retrieval-Augmented Generation (RAG) customer support assistant.
 
-// Purely casual messages — skip knowledge base search for these
-const CASUAL_RE = /^\s*(hi+|hello+|hey+|howdy|greetings|good\s*(morning|afternoon|evening|night|day)|what'?s up|how are you|how r u|how are things|i'?m (good|fine|okay|ok|great)|i am (good|fine|great)|thanks?\.?|thank you\.?|ty|bye+|goodbye|see you|take care|ok|okay|yes|no|sure|cool|great|nice|awesome|👋|🙏|😊|🤝|namaste|vanakkam|నమస్కారం|నమస్తే|नमस्ते|హాయ్|హలో)[\.,!?\s]*$/i;
+CRITICAL BEHAVIOR RULES:
+1. STRICT KNOWLEDGE BASE ONLY — You must answer ONLY and EXCLUSIVELY using the provided CONTEXT passages from the knowledge base below.
+2. ABSOLUTELY NO OUTSIDE KNOWLEDGE — Never use general training knowledge, world knowledge, or external facts to answer support questions. If the CONTEXT does not contain the answer, you must state clearly: "I'm sorry, but I do not have information about that in the support knowledge base."
+3. GREETINGS & CASUAL MESSAGES — For greetings (e.g. "hi", "hello", "thanks", "bye"), respond politely in 1-2 friendly sentences, inviting the customer to ask about our support topics.
+4. ACCURACY — Never invent or extrapolate policies, prices, dates, or specifications that are not explicitly stated in the context passages.
+5. LANGUAGE & SCRIPT — Always reply in the exact same language and script as the customer's query (e.g., Telugu, Hindi, English).
+6. FORMATTING — Use clean, readable Markdown (bullet points, bold text for key terms).`;
+
+const CASUAL_GREETINGS = {
+  te: "నమస్కారం! 👋 నేను మీకు ఎలా సహాయపడగలను? దయచేసి మా సపోర్ట్ డాక్యుమెంట్‌లకు సంబంధించిన ప్రశ్నను అడగండి.",
+  hi: "नमस्ते! 👋 मैं आपकी क्या मदद कर सकता हूँ? कृपया हमारे सपोर्ट डॉक्यूमेंट्स से संबंधित प्रश्न पूछें।",
+  ta: "வணக்கம்! 👋 நான் உங்களுக்கு எவ்வாறு உதவ முடியும்? எங்கள் ஆதரவு ஆவணங்கள் பற்றிய கேள்வியைக் கேட்கவும்.",
+  kn: "ನಮಸ್ಕಾರ! 👋 ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು? ದಯವಿಟ್ಟು ನಮ್ಮ ಬೆಂಬಲ ದಾಖಲೆಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.",
+  en: "Hi there! 👋 How can I help you today? Please ask any question about our support documentation."
+};
+
+function isCasualMessage(text) {
+  const clean = text.trim().toLowerCase().replace(/[.,!?;:👋🙏😊🤝]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return true;
+  const casualPhrases = new Set([
+    'hi', 'hello', 'hey', 'howdy', 'greetings',
+    'good morning', 'good afternoon', 'good evening', 'good night', 'good day',
+    'whats up', "what's up", 'how are you', 'how r u', 'how are things',
+    'im good', 'im fine', 'im ok', 'im great', 'i am good', 'i am fine',
+    'thanks', 'thank you', 'thank you very much', 'thanks a lot', 'thx', 'ty',
+    'bye', 'goodbye', 'see you', 'take care',
+    'ok', 'okay', 'yes', 'no', 'sure', 'cool', 'great', 'nice', 'awesome',
+    'namaste', 'vanakkam', 'నమస్కారం', 'నమస్తే', 'नमस्ते', 'హాయ్', 'హలో'
+  ]);
+  if (casualPhrases.has(clean)) return true;
+  const tokens = clean.split(' ');
+  const greetingTokens = new Set([
+    'hi', 'hello', 'hey', 'good', 'morning', 'afternoon', 'evening', 'night', 'day',
+    'there', 'everyone', 'team', 'bot', 'assistant', 'howdy', 'greetings', 'thanks',
+    'thank', 'you', 'very', 'much', 'bye', 'ok', 'okay', 'yes', 'sure', 'namaste', 'vanakkam'
+  ]);
+  if (tokens.length <= 4 && tokens.every(t => greetingTokens.has(t))) {
+    return true;
+  }
+  return false;
+}
 
 // Streaming generator for real-time SSE output
 async function* answerStream(message, history = [], category = null) {
   const detectedLang = detectLanguage(message);
-  const isCasual = CASUAL_RE.test(message.trim());
+  const isCasual = isCasualMessage(message);
   const hits = isCasual ? [] : await retrieve(message, 4, category);
 
   yield { type: 'meta', hits, detectedLang: detectedLang.label };
 
+  // STRICT RAG: If non-casual and no context matches found in the knowledge base, strictly decline
+  if (!isCasual && (!hits || hits.length === 0)) {
+    const noInfoReply = NO_CONTEXT_REPLIES[detectedLang.code] || NO_CONTEXT_REPLIES.en;
+    const words = noInfoReply.split(' ');
+    for (let i = 0; i < words.length; i++) {
+      yield { type: 'token', text: (i === 0 ? '' : ' ') + words[i] };
+    }
+    yield { type: 'done', fullReply: noInfoReply };
+    return;
+  }
+
   if (!client) {
     let reply = '';
     if (isCasual) {
-      reply = 'Hi there! 👋 How can I help you today? Feel free to ask questions about our products, refund policies, or account support.';
+      reply = CASUAL_GREETINGS[detectedLang.code] || CASUAL_GREETINGS.en;
     } else {
       reply = hits.length
         ? hits[0].text
-        : "I couldn't find a direct match in our knowledge base. Would you like to rephrase or reach out to human support?";
+        : (NO_CONTEXT_REPLIES[detectedLang.code] || NO_CONTEXT_REPLIES.en);
     }
-    // Stream fallback tokens
     const words = reply.split(' ');
     for (let i = 0; i < words.length; i++) {
       yield { type: 'token', text: (i === 0 ? '' : ' ') + words[i] };
@@ -206,6 +253,7 @@ async function* answerStream(message, history = [], category = null) {
     ...history.slice(-6).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
     { role: 'user', parts: [{ text: `${contextBlock}CUSTOMER MESSAGE:\n${message}` }] }
   ];
+
 
   try {
     const responseStream = await client.models.generateContentStream({
