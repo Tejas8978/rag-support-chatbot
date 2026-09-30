@@ -51,6 +51,25 @@ async function authMiddleware(req, res, next) {
   next();
 }
 
+// Require authenticated user
+function requireAuth(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+  }
+  next();
+}
+
+// Require admin role
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+  }
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin privileges required to perform this action.' });
+  }
+  next();
+}
+
 // Ensure default demo user exists in MongoDB
 async function ensureDefaultUser() {
   try {
@@ -70,4 +89,5 @@ async function ensureDefaultUser() {
   }
 }
 
-module.exports = { hashPassword, verifyPassword, createSession, authMiddleware, ensureDefaultUser };
+module.exports = { hashPassword, verifyPassword, createSession, authMiddleware, requireAuth, requireAdmin, ensureDefaultUser };
+

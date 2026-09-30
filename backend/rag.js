@@ -1,9 +1,18 @@
 const { GoogleGenAI } = require('@google/genai');
-const { Chunk } = require('./models');
+const { Chunk, Doc } = require('./models');
 
 const client = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
-const MIN = parseFloat(process.env.RAG_MIN_SCORE || '0.55');
+const MIN = parseFloat(process.env.RAG_MIN_SCORE || '0.50');
 let extractor;
+
+// Language detection helper
+function detectLanguage(text) {
+  if (/[\u0C00-\u0C7F]/.test(text)) return { code: 'te', name: 'Telugu', label: 'Telugu / తెలుగు' };
+  if (/[\u0900-\u097F]/.test(text)) return { code: 'hi', name: 'Hindi', label: 'Hindi / हिन्दी' };
+  if (/[\u0B80-\u0BFF]/.test(text)) return { code: 'ta', name: 'Tamil', label: 'Tamil / தமிழ்' };
+  if (/[\u0C80-\u0CFF]/.test(text)) return { code: 'kn', name: 'Kannada', label: 'Kannada / ಕನ್ನಡ' };
+  return { code: 'en', name: 'English', label: 'English' };
+}
 
 // Multilingual embeddings (100 languages), runs locally — no API key needed.
 async function embed(text, type) {
@@ -40,18 +49,60 @@ function chunkText(text, max = 600) {
 
 async function indexDoc(doc) {
   await Chunk.deleteMany({ docId: doc._id });
-  for (const text of chunkText(doc.text)) {
-    await Chunk.create({ docId: doc._id, title: doc.title, text, embedding: await embed(text, 'passage') });
+  const chunks = chunkText(doc.text);
+  for (const text of chunks) {
+    await Chunk.create({
+      docId: doc._id,
+      title: doc.title,
+      text,
+      category: doc.category || 'General',
+      embedding: await embed(text, 'passage')
+    });
   }
+  await Doc.findByIdAndUpdate(doc._id, { chunkCount: chunks.length });
+  return chunks.length;
 }
 
 const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
 
-async function retrieve(query, k = 4) {
+function extractWords(str) {
+  return (str.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter(w => w.length > 2);
+}
+
+// Hybrid retrieval: Dense vector cosine similarity + Keyword overlap boost
+async function retrieve(query, k = 4, category = null) {
   const q = await embed(query, 'query');
-  const chunks = await Chunk.find().lean();
+  const filter = category && category !== 'All' ? { category } : {};
+  const chunks = await Chunk.find(filter).lean();
+  if (!chunks.length) return [];
+
+  const queryWords = extractWords(query);
+
   return chunks
-    .map(c => ({ title: c.title, text: c.text, score: dot(q, c.embedding) }))
+    .map(c => {
+      const semScore = dot(q, c.embedding);
+      
+      // Keyword overlap calculation for exact terms
+      let kwScore = 0;
+      if (queryWords.length > 0) {
+        const chunkWords = new Set(extractWords((c.title || '') + ' ' + (c.text || '')));
+        let matches = 0;
+        for (const qw of queryWords) {
+          if (chunkWords.has(qw)) matches++;
+        }
+        kwScore = matches / queryWords.length;
+      }
+
+      // Hybrid combination (85% vector similarity, 15% keyword overlap)
+      const combinedScore = (semScore * 0.85) + (kwScore * 0.15);
+
+      return {
+        title: c.title,
+        text: c.text,
+        category: c.category || 'General',
+        score: combinedScore
+      };
+    })
     .sort((a, b) => b.score - a.score)
     .slice(0, k)
     .filter(c => c.score >= MIN);
@@ -64,30 +115,41 @@ Behavior rules:
 2. SUPPORT QUESTIONS WITH CONTEXT — if CONTEXT passages are provided below the message, use them to give an accurate, specific answer.
 3. SUPPORT QUESTIONS WITHOUT CONTEXT — use your own general knowledge to give a genuinely helpful answer. Do NOT say "I don't have that info" when you actually know.
 4. LANGUAGE — always reply in the same language and script as the customer's message.
-5. ACCURACY — never invent specific prices, policies, or dates that aren't in the context.
-6. TONE — keep answers concise, warm, and easy to understand.`;
+5. FORMATTING — format clear explanations using clean Markdown (bullet points, bold text for key terms, numbered steps).
+6. ACCURACY — never invent specific prices, policies, or dates that aren't in the context.
+7. TONE — keep answers concise, warm, and easy to understand.`;
 
 // Purely casual messages — skip knowledge base search for these
 const CASUAL_RE = /^\s*(hi+|hello+|hey+|howdy|greetings|good\s*(morning|afternoon|evening|night|day)|what'?s up|how are you|how r u|how are things|i'?m (good|fine|okay|ok|great)|i am (good|fine|great)|thanks?\.?|thank you\.?|ty|bye+|goodbye|see you|take care|ok|okay|yes|no|sure|cool|great|nice|awesome|👋|🙏|😊|🤝|namaste|vanakkam|నమస్కారం|నమస్తే|नमस्ते|హాయ్|హలో)[\.,!?\s]*$/i;
 
-async function answer(message, history = []) {
+// Streaming generator for real-time SSE output
+async function* answerStream(message, history = [], category = null) {
+  const detectedLang = detectLanguage(message);
   const isCasual = CASUAL_RE.test(message.trim());
-  const hits = isCasual ? [] : await retrieve(message);
+  const hits = isCasual ? [] : await retrieve(message, 4, category);
 
-  // No API key fallback mode
+  yield { type: 'meta', hits, detectedLang: detectedLang.label };
+
   if (!client) {
-    if (isCasual) return { hits, reply: 'Hi there! 👋 How can I help you today?' };
-    return {
-      hits,
-      reply: hits.length
+    let reply = '';
+    if (isCasual) {
+      reply = 'Hi there! 👋 How can I help you today? Feel free to ask questions about our products, refund policies, or account support.';
+    } else {
+      reply = hits.length
         ? hits[0].text
-        : "I couldn't find that in the knowledge base. Would you like to talk to a human agent?"
-    };
+        : "I couldn't find a direct match in our knowledge base. Would you like to rephrase or reach out to human support?";
+    }
+    // Stream fallback tokens
+    const words = reply.split(' ');
+    for (let i = 0; i < words.length; i++) {
+      yield { type: 'token', text: (i === 0 ? '' : ' ') + words[i] };
+    }
+    yield { type: 'done', fullReply: reply };
+    return;
   }
 
-  // Build context block only when KB hits exist
   const contextBlock = hits.length
-    ? `CONTEXT from knowledge base:\n${hits.map((h, i) => `[${i + 1}] (${h.title}): ${h.text}`).join('\n')}\n\n`
+    ? `CONTEXT from knowledge base:\n${hits.map((h, i) => `[${i + 1}] (${h.title} - ${h.category}): ${h.text}`).join('\n')}\n\n`
     : '';
 
   const model = process.env.LLM_MODEL || 'gemini-2.5-flash';
@@ -97,13 +159,47 @@ async function answer(message, history = []) {
     { role: 'user', parts: [{ text: `${contextBlock}CUSTOMER MESSAGE:\n${message}` }] }
   ];
 
-  const res = await client.models.generateContent({
-    model,
-    contents,
-    config: { systemInstruction: SYSTEM, maxOutputTokens: 600 }
-  });
+  try {
+    const responseStream = await client.models.generateContentStream({
+      model,
+      contents,
+      config: { systemInstruction: SYSTEM, maxOutputTokens: 800 }
+    });
 
-  return { hits, reply: res.text };
+    let fullReply = '';
+    for await (const chunk of responseStream) {
+      if (chunk.text) {
+        fullReply += chunk.text;
+        yield { type: 'token', text: chunk.text };
+      }
+    }
+    yield { type: 'done', fullReply };
+  } catch (err) {
+    console.error('LLM generation error:', err);
+    const fallbackMsg = `Error generating AI reply: ${err.message || 'Please try again later.'}`;
+    yield { type: 'token', text: fallbackMsg };
+    yield { type: 'done', fullReply: fallbackMsg };
+  }
 }
 
-module.exports = { indexDoc, answer, warmUp };
+async function answer(message, history = [], category = null) {
+  let fullReply = '';
+  let hits = [];
+  let detectedLang = 'English';
+
+  for await (const event of answerStream(message, history, category)) {
+    if (event.type === 'meta') {
+      hits = event.hits;
+      detectedLang = event.detectedLang;
+    } else if (event.type === 'token') {
+      fullReply += event.text;
+    } else if (event.type === 'done' && event.fullReply) {
+      fullReply = event.fullReply;
+    }
+  }
+
+  return { hits, reply: fullReply, detectedLang };
+}
+
+module.exports = { indexDoc, retrieve, answer, answerStream, warmUp, detectLanguage };
+

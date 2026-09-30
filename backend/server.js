@@ -9,13 +9,13 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { Doc, Chunk, Conv, User, Session } = require('./models');
-const { hashPassword, verifyPassword, createSession, authMiddleware, ensureDefaultUser } = require('./auth');
+const { hashPassword, verifyPassword, createSession, authMiddleware, requireAuth, requireAdmin, ensureDefaultUser } = require('./auth');
 const rag = require('./rag');
 
 const app = express();
-app.use(cors(), express.json({ limit: '2mb' }), authMiddleware, express.static(path.join(__dirname, '../frontend')));
+app.use(cors(), express.json({ limit: '5mb' }), authMiddleware, express.static(path.join(__dirname, '../frontend')));
 
-const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: 'Something went wrong on the server.' }); });
+const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: e.message || 'Something went wrong on the server.' }); });
 
 // Authentication Routes connected to MongoDB
 app.post('/api/auth/register', wrap(async (req, res) => {
@@ -73,16 +73,35 @@ app.post('/api/auth/logout', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.get('/api/docs', wrap(async (_, res) => res.json(await Doc.find().sort({ createdAt: -1 }).lean())));
+// Knowledge Base Routes with RBAC & Search
+app.get('/api/docs', wrap(async (req, res) => {
+  const { q, category } = req.query;
+  const filter = {};
+  if (category && category !== 'All') filter.category = category;
+  if (q && q.trim()) {
+    filter.$or = [
+      { title: { $regex: q.trim(), $options: 'i' } },
+      { text: { $regex: q.trim(), $options: 'i' } }
+    ];
+  }
+  const docs = await Doc.find(filter).sort({ createdAt: -1 }).lean();
+  res.json(docs);
+}));
 
-app.post('/api/docs', wrap(async (req, res) => {
-  const { title, text, lang } = req.body;
-  if (!title?.trim() || !text?.trim()) return res.status(400).json({ error: 'Add a title and some text.' });
+app.post('/api/docs', requireAdmin, wrap(async (req, res) => {
+  const { title, text, lang, category } = req.body;
+  if (!title?.trim() || !text?.trim()) return res.status(400).json({ error: 'Please provide both a title and text.' });
   let doc;
   try {
-    doc = await Doc.create({ title: title.trim(), text: text.trim(), lang: lang || 'auto' });
-    await rag.indexDoc(doc);
-    res.json(doc);
+    doc = await Doc.create({
+      title: title.trim(),
+      text: text.trim(),
+      lang: lang || 'auto',
+      category: category?.trim() || 'General'
+    });
+    const chunkCount = await rag.indexDoc(doc);
+    doc.chunkCount = chunkCount;
+    res.status(201).json(doc);
   } catch (err) {
     if (doc?._id) await Doc.findByIdAndDelete(doc._id);
     console.error('Failed to index document:', err);
@@ -90,9 +109,57 @@ app.post('/api/docs', wrap(async (req, res) => {
   }
 }));
 
-app.delete('/api/docs/:id', wrap(async (req, res) => {
+app.put('/api/docs/:id', requireAdmin, wrap(async (req, res) => {
+  const { title, text, category, lang } = req.body;
+  const doc = await Doc.findById(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+
+  if (title?.trim()) doc.title = title.trim();
+  if (text?.trim()) doc.text = text.trim();
+  if (category?.trim()) doc.category = category.trim();
+  if (lang) doc.lang = lang;
+
+  await doc.save();
+  const chunkCount = await rag.indexDoc(doc);
+  doc.chunkCount = chunkCount;
+  res.json(doc);
+}));
+
+app.delete('/api/docs/:id', requireAdmin, wrap(async (req, res) => {
   await Doc.findByIdAndDelete(req.params.id);
   await Chunk.deleteMany({ docId: req.params.id });
+  res.json({ ok: true, id: req.params.id });
+}));
+
+// Conversation & Session Management
+app.get('/api/chat/sessions', wrap(async (req, res) => {
+  const filter = req.user ? { userId: req.user.id } : {};
+  const sessions = await Conv.find(filter)
+    .select('sessionId title updatedAt messages')
+    .sort({ updatedAt: -1 })
+    .limit(30)
+    .lean();
+  res.json(sessions.map(s => ({
+    sessionId: s.sessionId,
+    title: s.title || (s.messages?.[0]?.content?.slice(0, 32) + '…') || 'New Conversation',
+    messageCount: s.messages?.length || 0,
+    updatedAt: s.updatedAt
+  })));
+}));
+
+app.post('/api/chat/session', wrap(async (req, res) => {
+  const sessionId = req.body.sessionId || require('crypto').randomUUID();
+  const conv = await Conv.create({
+    sessionId,
+    userId: req.user?.id || null,
+    title: req.body.title || 'New Conversation',
+    messages: []
+  });
+  res.json({ sessionId: conv.sessionId, title: conv.title });
+}));
+
+app.delete('/api/chat/session/:sid', wrap(async (req, res) => {
+  await Conv.deleteOne({ sessionId: req.params.sid });
   res.json({ ok: true });
 }));
 
@@ -101,14 +168,112 @@ app.get('/api/chat/:sid', wrap(async (req, res) => {
   res.json(conv?.messages || []);
 }));
 
-app.post('/api/chat', wrap(async (req, res) => {
-  const { sessionId, message } = req.body;
-  if (!sessionId || !message?.trim()) return res.status(400).json({ error: 'Type a message first.' });
-  const conv = (await Conv.findOne({ sessionId })) || new Conv({ sessionId, messages: [] });
-  const { reply, hits } = await rag.answer(message, conv.messages);
-  conv.messages.push({ role: 'user', content: message }, { role: 'assistant', content: reply, sources: hits.map(h => h.title) });
+// Message Feedback (Thumbs up / down)
+app.post('/api/chat/feedback', wrap(async (req, res) => {
+  const { sessionId, messageIndex, feedback } = req.body;
+  if (!sessionId || messageIndex === undefined) return res.status(400).json({ error: 'Missing sessionId or messageIndex' });
+  const conv = await Conv.findOne({ sessionId });
+  if (!conv || !conv.messages[messageIndex]) return res.status(404).json({ error: 'Message not found' });
+  conv.messages[messageIndex].feedback = feedback;
   await conv.save();
-  res.json({ reply, sources: hits.map(h => ({ title: h.title, text: h.text, score: +h.score.toFixed(3) })) });
+  res.json({ ok: true, feedback });
+}));
+
+// Streaming Chat API (Server-Sent Events)
+app.post('/api/chat/stream', async (req, res) => {
+  const { sessionId, message, category } = req.body;
+  if (!sessionId || !message?.trim()) {
+    return res.status(400).json({ error: 'Type a message first.' });
+  }
+
+  // Set SSE Headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const conv = (await Conv.findOne({ sessionId })) || new Conv({
+    sessionId,
+    userId: req.user?.id || null,
+    title: message.trim().slice(0, 36),
+    messages: []
+  });
+
+  if (req.user && !conv.userId) {
+    conv.userId = req.user.id;
+  }
+  if (!conv.title || conv.title === 'New Conversation') {
+    conv.title = message.trim().slice(0, 36);
+  }
+
+  let finalHits = [];
+  let finalReply = '';
+  let detectedLang = 'English';
+
+  try {
+    for await (const event of rag.answerStream(message, conv.messages, category)) {
+      if (event.type === 'meta') {
+        finalHits = event.hits;
+        detectedLang = event.detectedLang;
+        res.write(`data: ${JSON.stringify({ type: 'meta', hits: finalHits, detectedLang })}\n\n`);
+      } else if (event.type === 'token') {
+        finalReply += event.text;
+        res.write(`data: ${JSON.stringify({ type: 'token', text: event.text })}\n\n`);
+      } else if (event.type === 'done') {
+        if (event.fullReply) finalReply = event.fullReply;
+      }
+    }
+
+    conv.messages.push(
+      { role: 'user', content: message, at: new Date() },
+      {
+        role: 'assistant',
+        content: finalReply,
+        sources: finalHits.map(h => h.title),
+        detectedLang,
+        at: new Date()
+      }
+    );
+    conv.updatedAt = new Date();
+    await conv.save();
+
+    res.write(`data: ${JSON.stringify({ type: 'done', fullReply: finalReply })}\n\n`);
+  } catch (err) {
+    console.error('Streaming error:', err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+  } finally {
+    res.end();
+  }
+});
+
+// Non-streaming fallback Chat API
+app.post('/api/chat', wrap(async (req, res) => {
+  const { sessionId, message, category } = req.body;
+  if (!sessionId || !message?.trim()) return res.status(400).json({ error: 'Type a message first.' });
+
+  const conv = (await Conv.findOne({ sessionId })) || new Conv({
+    sessionId,
+    userId: req.user?.id || null,
+    title: message.trim().slice(0, 36),
+    messages: []
+  });
+
+  if (req.user && !conv.userId) conv.userId = req.user.id;
+  if (!conv.title || conv.title === 'New Conversation') conv.title = message.trim().slice(0, 36);
+
+  const { reply, hits, detectedLang } = await rag.answer(message, conv.messages, category);
+  conv.messages.push(
+    { role: 'user', content: message, at: new Date() },
+    { role: 'assistant', content: reply, sources: hits.map(h => h.title), detectedLang, at: new Date() }
+  );
+  conv.updatedAt = new Date();
+  await conv.save();
+
+  res.json({
+    reply,
+    detectedLang,
+    sources: hits.map(h => ({ title: h.title, text: h.text, category: h.category, score: +h.score.toFixed(3) }))
+  });
 }));
 
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_support', {
@@ -122,3 +287,4 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rag_suppo
     if (rag.warmUp) rag.warmUp();
   });
 }).catch(e => { console.error('MongoDB connection failed:', e.message); process.exit(1); });
+
