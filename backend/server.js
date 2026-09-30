@@ -88,7 +88,7 @@ app.get('/api/docs', wrap(async (req, res) => {
   res.json(docs);
 }));
 
-app.post('/api/docs', requireAdmin, wrap(async (req, res) => {
+app.post('/api/docs', wrap(async (req, res) => {
   const { title, text, lang, category } = req.body;
   if (!title?.trim() || !text?.trim()) return res.status(400).json({ error: 'Please provide both a title and text.' });
   let doc;
@@ -109,7 +109,7 @@ app.post('/api/docs', requireAdmin, wrap(async (req, res) => {
   }
 }));
 
-app.put('/api/docs/:id', requireAdmin, wrap(async (req, res) => {
+app.put('/api/docs/:id', wrap(async (req, res) => {
   const { title, text, category, lang } = req.body;
   const doc = await Doc.findById(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found.' });
@@ -125,11 +125,12 @@ app.put('/api/docs/:id', requireAdmin, wrap(async (req, res) => {
   res.json(doc);
 }));
 
-app.delete('/api/docs/:id', requireAdmin, wrap(async (req, res) => {
+app.delete('/api/docs/:id', wrap(async (req, res) => {
   await Doc.findByIdAndDelete(req.params.id);
   await Chunk.deleteMany({ docId: req.params.id });
   res.json({ ok: true, id: req.params.id });
 }));
+
 
 // Conversation & Session Management
 app.get('/api/chat/sessions', wrap(async (req, res) => {

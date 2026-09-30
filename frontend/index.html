@@ -1223,25 +1223,11 @@ async function logout() {
 
 function updateKbAdminStatus() {
   const banner = $('#kbAdminBanner');
-  const isAdmin = currentUser && currentUser.role === 'admin';
-  if (isAdmin) {
-    banner.className = 'kb-banner admin';
-    banner.innerHTML = '<div>👑 <strong>Admin Access Granted:</strong> You can add, edit, upload, and delete knowledge base documents.</div>';
-  } else {
-    banner.className = 'kb-banner guest';
-    banner.innerHTML = `
-      <div>🔒 <strong>Read-Only Mode:</strong> Sign in as Admin (demo@example.com / demo1234) to add or edit documents.</div>
-      <button type="button" id="kbAdminLoginBtn" class="btn small" style="margin-left:12px">Sign in as Admin</button>
-    `;
-    $('#kbAdminLoginBtn')?.addEventListener('click', () => {
-      switchTab('auth');
-      $('#authEmail').value = 'demo@example.com';
-      $('#authPassword').value = 'demo1234';
-      $('#authForm').requestSubmit();
-    });
-  }
-  $('#addDocBtn').disabled = !isAdmin;
+  banner.className = 'kb-banner admin';
+  banner.innerHTML = '<div>📚 <strong>Knowledge Base Ready:</strong> Add, upload (TXT/MD/PDF), edit, or search support documentation.</div>';
+  $('#addDocBtn').disabled = false;
 }
+
 
 $('#pwToggle').onclick = () => {
   const pw = $('#authPassword');
@@ -1894,36 +1880,28 @@ async function loadDocs() {
       btnGroup.style.display = 'flex';
       btnGroup.style.gap = '8px';
 
-      if (isAdmin) {
-        const editBtn = document.createElement('button');
-        editBtn.className = 'btn ghost small';
-        editBtn.textContent = 'Edit';
-        editBtn.onclick = () => startEditDoc(d);
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn ghost small';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick = () => startEditDoc(d);
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn ghost small';
-        delBtn.style.color = '#ef4444';
-        delBtn.textContent = 'Delete';
-        delBtn.onclick = async () => {
-          if (confirm(`Delete document "${d.title}" and its indexed chunks?`)) {
-            delBtn.disabled = true;
-            try {
-              await api('/docs/' + d._id, { method: 'DELETE' });
-              loadDocs();
-            } catch (e) {
-              alert('Delete failed: ' + e.message);
-              delBtn.disabled = false;
-            }
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn ghost small';
+      delBtn.style.color = '#ef4444';
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = async () => {
+        if (confirm(`Delete document "${d.title}" and its indexed chunks?`)) {
+          delBtn.disabled = true;
+          try {
+            await api('/docs/' + d._id, { method: 'DELETE' });
+            loadDocs();
+          } catch (e) {
+            alert('Delete failed: ' + e.message);
+            delBtn.disabled = false;
           }
-        };
-        btnGroup.append(editBtn, delBtn);
-      } else {
-        const lockSpan = document.createElement('span');
-        lockSpan.style.fontSize = '12px';
-        lockSpan.style.color = 'var(--muted)';
-        lockSpan.textContent = '🔒 Read-only';
-        btnGroup.append(lockSpan);
-      }
+        }
+      };
+      btnGroup.append(editBtn, delBtn);
 
       card.append(info, btnGroup);
       box.append(card);
@@ -1993,7 +1971,18 @@ $('#docForm').onsubmit = async e => {
     }
     errEl.style.color = '#10b981';
     cancelEdit();
+
+    // Auto-select category or 'All' so newly added doc is visible right away
+    if (kbSelectedCategory !== 'All' && kbSelectedCategory !== category) {
+      document.querySelectorAll('#kbCategoryFilters .cat-pill').forEach(p => p.classList.remove('active'));
+      const target = document.querySelector(`#kbCategoryFilters .cat-pill[data-cat="${category}"]`) || document.querySelector('#kbCategoryFilters .cat-pill[data-cat="All"]');
+      if (target) {
+        target.classList.add('active');
+        kbSelectedCategory = target.dataset.cat;
+      }
+    }
     await loadDocs();
+
   } catch (err) {
     errEl.textContent = err.message;
     errEl.style.color = '#ef4444';
